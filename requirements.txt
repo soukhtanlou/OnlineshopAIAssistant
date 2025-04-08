@@ -1,5 +1,5 @@
-streamlit
-sentence-transformers
-pandas
-transformers
-torch
+streamlit==1.36.0
+sentence-transformers==3.0.1
+pandas==2.2.2
+transformers==4.42.3
+torch==2.3.1
