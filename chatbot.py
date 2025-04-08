@@ -2,8 +2,9 @@ import streamlit as st
 from sentence_transformers import SentenceTransformer, util
 import pandas as pd
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import os
 
-# Load data and models
+# Load data and models with error handling
 @st.cache_resource
 def load_models():
     products = pd.read_csv("test_amazon_products.csv")
@@ -12,12 +13,24 @@ def load_models():
         products["description"].fillna("") + " " +
         products["categories"].fillna("")
     )
-    model_search = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+    
+    # Try loading SentenceTransformer with fallback
+    try:
+        model_search = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2", cache_folder="/tmp/model_cache")
+    except Exception as e:
+        st.error(f"Error loading SentenceTransformer: {e}. Using a lighter model.")
+        model_search = SentenceTransformer("all-MiniLM-L6-v2", cache_folder="/tmp/model_cache")
+    
     product_embeddings = model_search.encode(products["search_text"].tolist(), convert_to_tensor=True)
     
-    model_name = "openai-community/gpt2"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
+    # Try loading GPT-2 with fallback
+    try:
+        tokenizer = AutoTokenizer.from_pretrained("openai-community/gpt2", cache_dir="/tmp/model_cache")
+        model = AutoModelForCausalLM.from_pretrained("openai-community/gpt2", cache_dir="/tmp/model_cache")
+    except Exception as e:
+        st.error(f"Error loading GPT-2: {e}. Using a smaller model.")
+        tokenizer = AutoTokenizer.from_pretrained("distilgpt2", cache_dir="/tmp/model_cache")
+        model = AutoModelForCausalLM.from_pretrained("distilgpt2", cache_dir="/tmp/model_cache")
     
     return products, model_search, product_embeddings, tokenizer, model
 
@@ -35,7 +48,7 @@ def generate_text(prompt):
     inputs = tokenizer(prompt, return_tensors="pt")
     outputs = model.generate(
         **inputs,
-        max_new_tokens=40,  # Reduced for less rambling
+        max_new_tokens=40,
         temperature=0.6,
         do_sample=True,
         top_k=40,
@@ -45,7 +58,7 @@ def generate_text(prompt):
 
 # Interactive chatbot logic with dynamic questions
 def process_query_interactive(initial_query, user_response=None):
-    if user_response is None:  # Step 1: Initial query
+    if user_response is None:
         results = search_products(initial_query)
         product_list = "\n".join(
             [f"{r['title']} - ${r['final_price']} - Rating: {r['rating']} ({r['reviews_count']} reviews)"
@@ -57,7 +70,7 @@ def process_query_interactive(initial_query, user_response=None):
         )
         return generate_text(prompt), {"step": "budget", "results": results}
     
-    elif user_response["step"] == "budget":  # Step 2: Budget filter
+    elif user_response["step"] == "budget":
         initial_results = user_response["results"]
         budget = float(user_response["budget"])
         filtered_results = [
@@ -68,7 +81,6 @@ def process_query_interactive(initial_query, user_response=None):
             [f"{r['title']} - ${r['final_price']} - Rating: {r['rating']} ({r['reviews_count']} reviews)"
              for r in filtered_results]
         )
-        # Dynamic feature question based on query
         if "headphones" in initial_query.lower() or "هدفون" in initial_query:
             feature_prompt = "Do you want wireless or wired headphones?"
         elif "shirt" in initial_query.lower() or "پیراهن" in initial_query or "تیشرت" in initial_query:
@@ -90,10 +102,9 @@ def process_query_interactive(initial_query, user_response=None):
             )
         return generate_text(prompt), {"step": "features", "results": filtered_results}
     
-    elif user_response["step"] == "features":  # Step 3: Final filter and recommend
+    elif user_response["step"] == "features":
         filtered_results = user_response["results"]
         feature_preference = user_response["feature"].lower()
-        # Dynamic filtering based on query and preference
         if "headphones" in initial_query.lower() or "هدفون" in initial_query:
             final_results = [
                 r for r in filtered_results
@@ -108,7 +119,7 @@ def process_query_interactive(initial_query, user_response=None):
                     (feature_preference in r["title"].lower() or feature_preference in r["description"].lower()))
             ] if feature_preference in ["s", "m", "l", "xl"] else filtered_results
         else:
-            final_results = filtered_results  # No specific filter for generic queries
+            final_results = filtered_results
         
         if not final_results:
             prompt = (
@@ -143,7 +154,7 @@ if st.button("Submit Query") and initial_query:
     st.session_state.response = response
     st.session_state.state = state
 
-# Display current response with better formatting
+# Display current response
 if st.session_state.response:
     st.text(st.session_state.response)
 
