@@ -3,7 +3,7 @@ from sentence_transformers import SentenceTransformer, util
 import pandas as pd
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# Load data and models (فقط یک بار موقع شروع)
+# Load data and models
 @st.cache_resource
 def load_models():
     products = pd.read_csv("test_amazon_products.csv")
@@ -35,7 +35,7 @@ def generate_text(prompt):
     inputs = tokenizer(prompt, return_tensors="pt")
     outputs = model.generate(
         **inputs,
-        max_new_tokens=80,
+        max_new_tokens=40,  # Reduced for less rambling
         temperature=0.6,
         do_sample=True,
         top_k=40,
@@ -43,9 +43,9 @@ def generate_text(prompt):
     )
     return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-# Interactive chatbot logic
+# Interactive chatbot logic with dynamic questions
 def process_query_interactive(initial_query, user_response=None):
-    if user_response is None:
+    if user_response is None:  # Step 1: Initial query
         results = search_products(initial_query)
         product_list = "\n".join(
             [f"{r['title']} - ${r['final_price']} - Rating: {r['rating']} ({r['reviews_count']} reviews)"
@@ -57,7 +57,7 @@ def process_query_interactive(initial_query, user_response=None):
         )
         return generate_text(prompt), {"step": "budget", "results": results}
     
-    elif user_response["step"] == "budget":
+    elif user_response["step"] == "budget":  # Step 2: Budget filter
         initial_results = user_response["results"]
         budget = float(user_response["budget"])
         filtered_results = [
@@ -68,21 +68,48 @@ def process_query_interactive(initial_query, user_response=None):
             [f"{r['title']} - ${r['final_price']} - Rating: {r['rating']} ({r['reviews_count']} reviews)"
              for r in filtered_results]
         )
-        prompt = (
-            f"User asked: '{initial_query}' with budget ${budget}. Options:\n{product_list}\n"
-            "Do you want wireless or wired headphones?"
-        )
+        # Dynamic feature question based on query
+        if "headphones" in initial_query.lower() or "هدفون" in initial_query:
+            feature_prompt = "Do you want wireless or wired headphones?"
+        elif "shirt" in initial_query.lower() or "پیراهن" in initial_query or "تیشرت" in initial_query:
+            feature_prompt = "What size do you want (e.g., S, M, L)?"
+        elif "gift" in initial_query.lower() or "کادو" in initial_query or "تولد" in initial_query:
+            feature_prompt = "Is it for a child or an adult?"
+        else:
+            feature_prompt = "Any specific preference (e.g., color, type)?"
+        
+        if not filtered_results:
+            prompt = (
+                f"User asked: '{initial_query}' with budget ${budget}. "
+                "No items found under this budget. Try a higher budget?"
+            )
+        else:
+            prompt = (
+                f"User asked: '{initial_query}' with budget ${budget}. Options:\n{product_list}\n"
+                f"{feature_prompt}"
+            )
         return generate_text(prompt), {"step": "features", "results": filtered_results}
     
-    elif user_response["step"] == "features":
+    elif user_response["step"] == "features":  # Step 3: Final filter and recommend
         filtered_results = user_response["results"]
         feature_preference = user_response["feature"].lower()
-        final_results = [
-            r for r in filtered_results
-            if (feature_preference in ["wireless", "wired"] and
-                ("headphones" in r["title"].lower() or "audio" in r["categories"].lower() or
-                 feature_preference in r["description"].lower() or feature_preference in r["title"].lower()))
-        ] if feature_preference in ["wireless", "wired"] else filtered_results
+        # Dynamic filtering based on query and preference
+        if "headphones" in initial_query.lower() or "هدفون" in initial_query:
+            final_results = [
+                r for r in filtered_results
+                if (feature_preference in ["wireless", "wired"] and
+                    ("headphones" in r["title"].lower() or "audio" in r["categories"].lower() or
+                     feature_preference in r["description"].lower() or feature_preference in r["title"].lower()))
+            ] if feature_preference in ["wireless", "wired"] else filtered_results
+        elif "shirt" in initial_query.lower() or "پیراهن" in initial_query or "تیشرت" in initial_query:
+            final_results = [
+                r for r in filtered_results
+                if (feature_preference in ["s", "m", "l", "xl"] and
+                    (feature_preference in r["title"].lower() or feature_preference in r["description"].lower()))
+            ] if feature_preference in ["s", "m", "l", "xl"] else filtered_results
+        else:
+            final_results = filtered_results  # No specific filter for generic queries
+        
         if not final_results:
             prompt = (
                 f"User asked: '{initial_query}' with budget ${user_response['budget']} and '{feature_preference}'. "
@@ -116,9 +143,9 @@ if st.button("Submit Query") and initial_query:
     st.session_state.response = response
     st.session_state.state = state
 
-# Display current response
+# Display current response with better formatting
 if st.session_state.response:
-    st.write(st.session_state.response)
+    st.text(st.session_state.response)
 
 # Step 2: Budget input
 if st.session_state.state and st.session_state.state["step"] == "budget":
@@ -131,7 +158,7 @@ if st.session_state.state and st.session_state.state["step"] == "budget":
 
 # Step 3: Feature input
 if st.session_state.state and st.session_state.state["step"] == "features":
-    feature = st.text_input("Do you want wireless or wired headphones? (e.g., wireless)", value="")
+    feature = st.text_input("Enter your preference (e.g., wireless, S, etc.):", value="")
     if st.button("Submit Preference") and feature:
         st.session_state.state["feature"] = feature
         response, state = process_query_interactive(st.session_state.initial_query, st.session_state.state)
